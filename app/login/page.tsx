@@ -32,24 +32,24 @@ export default function UserLogin() {
       if (user?.email === 'leo.perret@gmail.com') {
         toast.success('Acesso Administrativo detectado!')
         router.push('/admin')
-        return // Para a execução aqui
+        return
       }
 
-      // B. Verificar se é um Parceiro (Busca na tabela partners pelo user_id)
-      const { data: partner } = await supabase
+      // B. Verificar se é um Parceiro...
+      const { data: partner, error: partnerError } = await supabase
         .from('partners')
         .select('id')
         .eq('user_id', user?.id)
-        .single()
+        .maybeSingle()
+
+      if (partnerError) throw partnerError
 
       if (partner) {
-        toast.success('Bem-vindo ao seu Painel de Parceiro!')
         router.push('/dashboard/parceiro')
-        return // Para a execução aqui
+        return
       }
 
-      // C. Usuário Comum (Se não for admin nem parceiro)
-      toast.success('Bem-vindo(a) de volta!')
+      // C. Usuário Comum (se não for admin nem parceiro)
       router.push('/vitrine')
       
       // --- FIM DA LÓGICA DE REDIRECIONAMENTO ---
