@@ -169,12 +169,24 @@ export default function AdminDashboard() {
           </div>
         </div>
 
+        {/* Card de Atalhos Rápidos */}
         <div className="bg-white rounded-sm shadow-sm border border-[#E9EDF1] p-6">
           <h3 className="font-bold text-[#101828] mb-4">Ações Rápidas</h3>
           <div className="space-y-3">
-            <Link href="/admin/partners/new" className="flex items-center justify-between p-3 border rounded hover:bg-gray-50 group transition-all">
-              <span className="text-sm font-medium text-[#475467]">Cadastrar Parceiro</span>
-              <ArrowUpRight size={16} className="text-gray-400 group-hover:text-blue-500" />
+            <Link href="/admin/partners/new" className="flex items-center justify-between p-3 border rounded hover:bg-gray-50 transition-colors group">
+              <span className="text-sm font-medium text-[#475467]">Cadastrar Novo Cliente</span>
+              <ArrowUpRight size={16} className="text-gray-400 group-hover:text-blue-600" />
+            </Link>
+            <Link href="/admin/coupons/new" className="flex items-center justify-between p-3 border rounded hover:bg-gray-50 transition-colors group">
+              <span className="text-sm font-medium text-[#475467]">Criar Novo Cupom</span>
+              <ArrowUpRight size={16} className="text-gray-400 group-hover:text-blue-600" />
+            </Link>
+            <Link href="/admin/coupons/expiring" className="flex items-center justify-between p-3 border rounded border-orange-100 bg-orange-50/30 hover:bg-orange-50 transition-colors group">
+              <div className="flex items-center gap-2">
+                <Clock size={16} className="text-orange-500" />
+                <span className="text-sm font-medium text-orange-700">Ver Cupons a Vencer</span>
+              </div>
+              <ArrowUpRight size={16} className="text-orange-400" />
             </Link>
           </div>
         </div>
