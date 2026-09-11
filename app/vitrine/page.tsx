@@ -66,6 +66,7 @@ function VitrineContent() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
   const [selectedCoupon, setSelectedCoupon] = useState<any>(null)
+  const [activeUsageId, setActiveUsageId] = useState<string | null>(null)
   const [currentSlide, setCurrentSlide] = useState(0)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
@@ -118,7 +119,18 @@ function VitrineContent() {
   async function recordUsage(couponId: string) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
-    await supabase.from('coupon_usages').upsert([{ user_id: user.id, coupon_id: couponId }])
+    const { data, error } = await supabase
+      .from('coupon_usages')
+      .upsert([{ user_id: user.id, coupon_id: couponId }], { onConflict: 'user_id,coupon_id' })
+      .select('id')
+      .single()
+
+    if (error) {
+      console.error('Erro ao registrar uso do cupom:', error.message)
+      return
+    }
+
+    setActiveUsageId(data.id)
     if (!userHistory.includes(couponId)) setUserHistory(prev => [...prev, couponId])
   }
 
@@ -280,7 +292,7 @@ function VitrineContent() {
               <h4 className="font-black text-sm uppercase tracking-widest border-b pb-3 mb-4 italic">Cupons Recentes</h4>
               <div className="space-y-4">
                 {recentCoupons.map(c => (
-                  <div key={c.id} onClick={() => setSelectedCoupon(c)} className="flex items-center gap-3 cursor-pointer hover:bg-white p-2 rounded-xl transition-all group">
+                  <div key={c.id} onClick={() => {setSelectedCoupon(c); recordUsage(c.id)}} className="flex items-center gap-3 cursor-pointer hover:bg-white p-2 rounded-xl transition-all group">
                     <div className="bg-[#00B9F2]/10 p-2 rounded-lg text-[#00B9F2] group-hover:bg-[#00B9F2] group-hover:text-white"><Tag size={16}/></div>
                     <p className="text-xs font-bold text-slate-700 line-clamp-1">{c.title}</p>
                   </div>
@@ -364,7 +376,7 @@ function VitrineContent() {
       <AnimatePresence>
         {selectedCoupon && (
           <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedCoupon(null)} className="fixed inset-0 bg-black/80 z-[300] backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => {setSelectedCoupon(null); setActiveUsageId(null)}} className="fixed inset-0 bg-black/80 z-[300] backdrop-blur-sm" />
             <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="fixed bottom-0 left-0 right-0 bg-white z-[310] rounded-t-[40px] max-h-[95vh] overflow-y-auto p-6 md:p-10 shadow-2xl">
               <div className="max-w-5xl mx-auto flex flex-col md:flex-row gap-8">
                 <div className="flex-1">
@@ -378,12 +390,12 @@ function VitrineContent() {
                   <p className="text-slate-600 text-sm leading-relaxed">{selectedCoupon.long_description}</p>
                 </div>
                 <div className="flex-1 flex flex-col items-center bg-slate-50 rounded-[40px] p-8 border">
-                  <QRCodeSVG value={selectedCoupon.alphanumeric_code} size={150} />
+                  <QRCodeSVG value={activeUsageId || ''} size={150} />
                   <div className="w-full border-2 border-dashed border-[#00B9F2] p-4 rounded-2xl text-center my-6 bg-white">
-                    <span className="text-2xl font-black tracking-widest">{selectedCoupon.alphanumeric_code}</span>
+                    <span className="text-2xl font-black tracking-widest break-all">{activeUsageId || 'Gerando...'}</span>
                   </div>
                   <a href={`https://wa.me/${selectedCoupon.partners?.whatsapp || selectedCoupon.whatsapp_number}`} className="w-full bg-[#25D366] text-white py-4 rounded-2xl font-black flex justify-center gap-3 items-center shadow-lg"><MessageCircle size={24}/> WhatsApp</a>
-                  <button onClick={() => setSelectedCoupon(null)} className="mt-6 text-slate-400 font-bold uppercase text-[10px]">Fechar</button>
+                  <button onClick={() => {setSelectedCoupon(null); setActiveUsageId(null)}} className="mt-6 text-slate-400 font-bold uppercase text-[10px]">Fechar</button>
                 </div>
               </div>
             </motion.div>

@@ -1,11 +1,13 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Plus } from 'lucide-react'
 
 export default function AddClient() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const leadId = searchParams.get('leadId')
   const [loading, setLoading] = useState(false)
   const [logoFile, setLogoFile] = useState<File | null>(null)
   
@@ -18,9 +20,9 @@ export default function AddClient() {
   const [newCatName, setNewCatName] = useState('')
 
   const [formData, setFormData] = useState({
-    codigo_cliente: '', nome_estabelecimento: '', razao_social: '', cnpj_cpf: '',
-    formato_juridico: 'MEI', nome_responsavel: '', endereco: '', bairro: '',
-    cidade: '', uf: 'SP', cep: '', telefone: '', celular: '', email: '',
+    codigo_cliente: '', nome_estabelecimento: searchParams.get('nome') || '', razao_social: '', cnpj_cpf: '',
+    formato_juridico: 'MEI', nome_responsavel: searchParams.get('responsavel') || '', endereco: '', bairro: '',
+    cidade: '', uf: 'SP', cep: '', telefone: '', celular: searchParams.get('whatsapp') || '', email: searchParams.get('email') || '',
     observacoes: '', category_id: '', plan_id: '', // Adicionado plan_id
     data_inicio_plano: new Date().toISOString().split('T')[0], // Define hoje como padrão
     data_fim_plano: '',
@@ -196,12 +198,44 @@ export default function AddClient() {
      * ==========================================
      */
 
-    const { error } = await supabase
+    const { data: newPartner, error } = await supabase
       .from('partners')
       .insert([payload])
+      .select('id')
+      .single()
 
     if (error) {
       throw error
+    }
+
+    /*
+     * ==========================================
+     * 4.5. ENVIAR CONVITE DE ACESSO AO DASHBOARD
+     * ==========================================
+     */
+
+    const inviteResponse = await fetch('/api/partners/invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ partnerId: newPartner.id, email: formData.email })
+    })
+
+    if (!inviteResponse.ok) {
+      const inviteError = await inviteResponse.json()
+      // O parceiro já foi cadastrado — só o convite falhou. Avisa mas não trava o fluxo.
+      alert('Cliente cadastrado, mas houve um erro ao enviar o convite por e-mail: ' + inviteError.message)
+    }
+
+    // Se esse cadastro veio de um Lead (aba Interessados), marca como convertido
+    if (leadId) {
+      const { error: leadUpdateError } = await supabase
+        .from('leads_parceiros')
+        .update({ status: 'convertido' })
+        .eq('id', leadId)
+
+      if (leadUpdateError) {
+        console.error('Erro ao marcar lead como convertido:', leadUpdateError)
+      }
     }
 
     /*

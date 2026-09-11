@@ -71,9 +71,19 @@ export default async function LeadsPage() {
                 WHATSAPP
               </a>
 
-              <button className="p-3 text-slate-400 hover:text-[#00B9F2] transition-colors">
-                <ArrowRight size={20} />
-              </button>
+              {lead.status === 'convertido' ? (
+                <span className="px-4 py-3 text-green-600 bg-green-50 rounded-lg text-xs font-bold uppercase">
+                  Convertido
+                </span>
+              ) : (
+                <Link
+                  href={`/admin/partners/new?leadId=${lead.id}&nome=${encodeURIComponent(lead.nome_fantasia || '')}&responsavel=${encodeURIComponent(lead.responsavel || '')}&whatsapp=${encodeURIComponent(lead.whatsapp || '')}&email=${encodeURIComponent(lead.email || '')}`}
+                  className="bg-[#00B9F2] hover:bg-[#0092bf] text-white px-5 py-3 rounded-lg flex items-center gap-2 font-bold transition-colors shadow-sm text-sm"
+                  title="Converter em Parceiro"
+                >
+                  Converter <ArrowRight size={18} />
+                </Link>
+              )}
             </div>
           </div>
         ))}
