@@ -1,29 +1,45 @@
-"use client";
-import { useEffect, useState } from 'react';
-import { createBrowserClient } from '@supabase/ssr';
-import { Html5QrcodeScanner } from 'html5-qrcode';
-import { QrCode, Keyboard, CheckCircle, XCircle, Loader2, ArrowLeft, RefreshCw } from 'lucide-react';
-import { toast } from 'sonner';
-import Link from 'next/link';
+'use client'
+import { useEffect, useRef, useState } from 'react'
+import { supabase } from '@/lib/supabase'
+import { toast } from 'sonner'
+import { QrCode, Keyboard, CheckCircle2, XCircle, Loader2, ScanLine } from 'lucide-react'
 
-export default function ValidadorParceiro() {
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+type ResultStatus = 'idle' | 'success' | 'expired' | 'invalid' | 'not_found'
 
-  const [activeTab, setActiveTab] = useState<'camera' | 'manual'>('camera');
-  // Tipagem explícita para evitar erros de inferência
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [message, setMessage] = useState('');
-  const [manualCode, setManualCode] = useState('');
+type CouponPreview = {
+  id: string
+  title: string
+  short_description: string | null
+}
 
-  async function validarCupom(usageId: string) {
-    if (!usageId) return;
-    setStatus('loading');
-    
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
+type ValidationResult = {
+  status: ResultStatus
+  coupon?: CouponPreview
+}
+
+const SCANNER_DIV_ID = 'qr-reader'
+
+// Detecta se o texto lido/digitado é um UUID (id do cupom) em vez do
+// código de marketing (alphanumeric_code) — o QR impresso hoje codifica o id.
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export default function ValidarCupom() {
+  const [partnerId, setPartnerId] = useState<string | null>(null)
+  const [loadingPartner, setLoadingPartner] = useState(true)
+  const [mode, setMode] = useState<'manual' | 'scanner'>('manual')
+  const [code, setCode] = useState('')
+  const [validating, setValidating] = useState(false)
+  const [result, setResult] = useState<ValidationResult>({ status: 'idle' })
+  const scannerRef = useRef<any>(null)
+
+  // Descobre o parceiro logado a partir da sessão atual
+  useEffect(() => {
+    async function loadPartner() {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        setLoadingPartner(false)
+        return
+      }
       const { data: partner } = await supabase
         .from('partners')
         .select('id')
@@ -71,6 +87,14 @@ export default function ValidadorParceiro() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode])
 
+  // Retoma a câmera após o parceiro validar um cupom via scanner e
+  // quiser ler o próximo — sem isso a tela fica parada no último frame
+  function handleScanAgain() {
+    setResult({ status: 'idle' })
+    setCode('')
+    scannerRef.current?.resume()
+  }
+
   async function handleValidate(rawCode?: string) {
     const codeToValidate = (rawCode ?? code).trim().toUpperCase()
 
@@ -87,14 +111,21 @@ export default function ValidadorParceiro() {
     setResult({ status: 'idle' })
 
     try {
+      const isUuid = UUID_REGEX.test(codeToValidate)
+
       // Busca o cupom já restrito ao parceiro logado — um parceiro nunca
-      // consegue validar o código de outro estabelecimento, mesmo que o digite
-      const { data: coupon, error: couponError } = await supabase
+      // consegue validar o código de outro estabelecimento, mesmo que o digite.
+      // Aceita tanto o id (QR atual) quanto o alphanumeric_code (digitação manual).
+      let query = supabase
         .from('coupons')
         .select('id, title, short_description, status, active, expires_at')
-        .eq('alphanumeric_code', codeToValidate)
         .eq('partner_id', partnerId)
-        .maybeSingle()
+
+      query = isUuid
+        ? query.eq('id', codeToValidate)
+        : query.eq('alphanumeric_code', codeToValidate)
+
+      const { data: coupon, error: couponError } = await query.maybeSingle()
 
       if (couponError) throw couponError
 
@@ -134,40 +165,28 @@ export default function ValidadorParceiro() {
 
       if (usageError) throw usageError
 
-      setStatus('success');
-      setMessage(`Cupom "${usage.coupons.title}" validado com sucesso!`);
-      toast.success("Cupom validado!");
-
-    } catch (err: any) {
-      setStatus('error');
-      setMessage(err.message || "Erro ao validar.");
+      setResult({ status: 'success', coupon: preview })
+      toast.success('Cupom validado com sucesso!')
+    } catch (error: any) {
+      console.error('Erro ao validar cupom:', error)
+      toast.error(error.message || 'Erro ao validar cupom')
+    } finally {
+      setValidating(false)
+      setCode('')
     }
   }
 
-  useEffect(() => {
-    let scanner: Html5QrcodeScanner | null = null;
+  if (loadingPartner) {
+    return <div className="p-10 text-center text-slate-500">Carregando...</div>
+  }
 
-    if (activeTab === 'camera' && status === 'idle') {
-      scanner = new Html5QrcodeScanner(
-        "reader", 
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        false
-      );
-
-      scanner.render((decodedText) => {
-        if (scanner) scanner.clear();
-        validarCupom(decodedText);
-      }, (error) => {
-        // Erro silencioso
-      });
-    }
-
-    return () => {
-      if (scanner) {
-        scanner.clear().catch(err => console.error("Erro ao fechar scanner", err));
-      }
-    };
-  }, [activeTab, status]);
+  if (!partnerId) {
+    return (
+      <div className="p-10 text-center text-red-500">
+        Não foi possível identificar seu estabelecimento. Faça login novamente.
+      </div>
+    )
+  }
 
   return (
     <div className="max-w-md mx-auto my-10 p-6">
@@ -258,6 +277,17 @@ export default function ValidadorParceiro() {
             )}
           </div>
         </div>
+      )}
+
+      {/* Só aparece depois de ler um QR — retoma a câmera pro próximo cupom */}
+      {mode === 'scanner' && result.status !== 'idle' && (
+        <button
+          type="button"
+          onClick={handleScanAgain}
+          className="w-full mt-3 py-3 bg-slate-100 text-slate-700 rounded-xl font-medium flex items-center justify-center gap-2"
+        >
+          <ScanLine size={18} /> Ler outro cupom
+        </button>
       )}
     </div>
   )
