@@ -1,193 +1,264 @@
-"use client";
-import { useEffect, useState } from 'react';
-import { createBrowserClient } from '@supabase/ssr';
-import { Html5QrcodeScanner } from 'html5-qrcode';
-import { QrCode, Keyboard, CheckCircle, XCircle, Loader2, ArrowLeft, RefreshCw } from 'lucide-react';
-import { toast } from 'sonner';
-import Link from 'next/link';
+'use client'
+import { useEffect, useRef, useState } from 'react'
+import { supabase } from '@/lib/supabase'
+import { toast } from 'sonner'
+import { QrCode, Keyboard, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 
-export default function ValidadorParceiro() {
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+type ResultStatus = 'idle' | 'success' | 'expired' | 'invalid' | 'not_found'
 
-  const [activeTab, setActiveTab] = useState<'camera' | 'manual'>('camera');
-  // Tipagem explícita para evitar erros de inferência
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [message, setMessage] = useState('');
-  const [manualCode, setManualCode] = useState('');
+type CouponPreview = {
+  id: string
+  title: string
+  short_description: string | null
+}
 
-  async function validarCupom(usageId: string) {
-    if (!usageId) return;
-    setStatus('loading');
-    
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
+type ValidationResult = {
+  status: ResultStatus
+  coupon?: CouponPreview
+}
+
+const SCANNER_DIV_ID = 'qr-reader'
+
+export default function ValidarCupom() {
+  const [partnerId, setPartnerId] = useState<string | null>(null)
+  const [loadingPartner, setLoadingPartner] = useState(true)
+  const [mode, setMode] = useState<'manual' | 'scanner'>('manual')
+  const [code, setCode] = useState('')
+  const [validating, setValidating] = useState(false)
+  const [result, setResult] = useState<ValidationResult>({ status: 'idle' })
+  const scannerRef = useRef<any>(null)
+
+  // Descobre o parceiro logado a partir da sessão atual
+  useEffect(() => {
+    async function loadPartner() {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        setLoadingPartner(false)
+        return
+      }
       const { data: partner } = await supabase
         .from('partners')
         .select('id')
-        .eq('user_id', session?.user?.id)
-        .single();
+        .eq('user_id', user.id)
+        .single()
+      setPartnerId(partner?.id ?? null)
+      setLoadingPartner(false)
+    }
+    loadPartner()
+  }, [])
 
-      if (!partner) throw new Error("Parceiro não identificado.");
+  // Controla o ciclo de vida do leitor de QR Code
+  useEffect(() => {
+    if (mode !== 'scanner') {
+      scannerRef.current?.clear().catch(() => {})
+      scannerRef.current = null
+      return
+    }
 
-      const { data: usage, error: fetchError } = await supabase
+    let isMounted = true
+
+    import('html5-qrcode').then(({ Html5QrcodeScanner }) => {
+      if (!isMounted) return
+      const scanner = new Html5QrcodeScanner(
+        SCANNER_DIV_ID,
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        false
+      )
+      scanner.render(
+        (decodedText: string) => {
+          const cleanCode = decodedText.trim()
+          setCode(cleanCode)
+          scanner.pause(true)
+          handleValidate(cleanCode)
+        },
+        () => {} // erro de leitura em um frame específico — ignorado, tenta o próximo
+      )
+      scannerRef.current = scanner
+    })
+
+    return () => {
+      isMounted = false
+      scannerRef.current?.clear().catch(() => {})
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode])
+
+  async function handleValidate(rawCode?: string) {
+    const codeToValidate = (rawCode ?? code).trim().toUpperCase()
+
+    if (!codeToValidate) {
+      toast.error('Digite ou escaneie um código.')
+      return
+    }
+    if (!partnerId) {
+      toast.error('Não foi possível identificar seu estabelecimento.')
+      return
+    }
+
+    setValidating(true)
+    setResult({ status: 'idle' })
+
+    try {
+      // Busca o cupom já restrito ao parceiro logado — um parceiro nunca
+      // consegue validar o código de outro estabelecimento, mesmo que o digite
+      const { data: coupon, error: couponError } = await supabase
+        .from('coupons')
+        .select('id, title, short_description, status, active, expires_at')
+        .eq('alphanumeric_code', codeToValidate)
+        .eq('partner_id', partnerId)
+        .maybeSingle()
+
+      if (couponError) throw couponError
+
+      if (!coupon) {
+        setResult({ status: 'not_found' })
+        return
+      }
+
+      const preview: CouponPreview = {
+        id: coupon.id,
+        title: coupon.title,
+        short_description: coupon.short_description
+      }
+
+      const isExpired = new Date(coupon.expires_at) < new Date()
+      const isInactive = coupon.status !== 'active' || !coupon.active
+
+      if (isExpired) {
+        setResult({ status: 'expired', coupon: preview })
+        return
+      }
+      if (isInactive) {
+        setResult({ status: 'invalid', coupon: preview })
+        return
+      }
+
+      // Registra o resgate. Sem user_id: o código não identifica o cliente,
+      // só valida que aquele cupom é daquele parceiro e está dentro da validade.
+      const { error: usageError } = await supabase
         .from('coupon_usages')
-        .select('*, coupons(title, partner_id)')
-        .eq('id', usageId)
-        .single();
+        .insert([{
+          coupon_id: coupon.id,
+          partner_id: partnerId,
+          used_at: new Date().toISOString(),
+          validated_at: new Date().toISOString()
+        }])
 
-      if (fetchError || !usage) {
-        throw new Error("Cupom inválido ou não encontrado.");
-      }
+      if (usageError) throw usageError
 
-      if (usage.coupons.partner_id !== partner.id) {
-        throw new Error("Este cupom pertence a outro estabelecimento.");
-      }
-
-      if (usage.validated_at) {
-        const dataValidacao = new Date(usage.validated_at).toLocaleString('pt-BR');
-        throw new Error(`Este cupom já foi utilizado em ${dataValidacao}`);
-      }
-
-      const { error: updateError } = await supabase
-        .from('coupon_usages')
-        .update({ validated_at: new Date().toISOString() })
-        .eq('id', usageId);
-
-      if (updateError) throw updateError;
-
-      setStatus('success');
-      setMessage(`Cupom "${usage.coupons.title}" validado com sucesso!`);
-      toast.success("Cupom validado!");
-
-    } catch (err: any) {
-      setStatus('error');
-      setMessage(err.message || "Erro ao validar.");
+      setResult({ status: 'success', coupon: preview })
+      toast.success('Cupom validado com sucesso!')
+    } catch (error: any) {
+      console.error('Erro ao validar cupom:', error)
+      toast.error(error.message || 'Erro ao validar cupom')
+    } finally {
+      setValidating(false)
+      setCode('')
     }
   }
 
-  useEffect(() => {
-    let scanner: Html5QrcodeScanner | null = null;
+  if (loadingPartner) {
+    return <div className="p-10 text-center text-slate-500">Carregando...</div>
+  }
 
-    if (activeTab === 'camera' && status === 'idle') {
-      scanner = new Html5QrcodeScanner(
-        "reader", 
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        false
-      );
-
-      scanner.render((decodedText) => {
-        if (scanner) scanner.clear();
-        validarCupom(decodedText);
-      }, (error) => {
-        // Erro silencioso
-      });
-    }
-
-    return () => {
-      if (scanner) {
-        scanner.clear().catch(err => console.error("Erro ao fechar scanner", err));
-      }
-    };
-  }, [activeTab, status]);
+  if (!partnerId) {
+    return (
+      <div className="p-10 text-center text-red-500">
+        Não foi possível identificar seu estabelecimento. Faça login novamente.
+      </div>
+    )
+  }
 
   return (
-    <div className="min-h-screen bg-[#F2F0EF] p-4 md:p-8 text-black">
-      <div className="max-w-md mx-auto">
-        
-        <header className="mb-8 flex items-center gap-4">
-          <Link href="/dashboard/parceiro" className="bg-white p-3 rounded-2xl shadow-sm text-gray-400 hover:text-[#00B9F2]">
-            <ArrowLeft size={24} />
-          </Link>
-          <h1 className="text-2xl font-black text-gray-800 tracking-tight uppercase">VALIDAR CUPOM</h1>
-        </header>
+    <div className="max-w-md mx-auto my-10 p-6">
+      <h1 className="text-xl font-bold text-slate-800 mb-6">Validar Cupom</h1>
 
-        {status === 'success' && (
-          <div className="bg-white p-10 rounded-[32px] shadow-xl border-4 border-green-50 text-center animate-in zoom-in duration-300">
-            <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
-              <CheckCircle size={44} />
-            </div>
-            <h2 className="text-2xl font-black text-gray-800 mb-2 uppercase">VÁLIDO!</h2>
-            <p className="text-gray-500 mb-8 font-medium">{message}</p>
-            <button 
-              onClick={() => { setStatus('idle'); setManualCode(''); }}
-              className="w-full bg-green-600 text-white font-bold py-4 rounded-2xl hover:bg-green-700 flex items-center justify-center gap-2 transition-all"
-            >
-              <RefreshCw size={20} /> VALIDAR OUTRO
-            </button>
-          </div>
-        )}
-
-        {status === 'error' && (
-          <div className="bg-white p-10 rounded-[32px] shadow-xl border-4 border-red-50 text-center animate-in zoom-in duration-300">
-            <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
-              <XCircle size={44} />
-            </div>
-            <h2 className="text-2xl font-black text-gray-800 mb-2 uppercase">OPS!</h2>
-            <p className="text-gray-500 mb-8 font-medium">{message}</p>
-            <button 
-              onClick={() => { setStatus('idle'); setManualCode(''); }}
-              className="w-full bg-red-600 text-white font-bold py-4 rounded-2xl hover:bg-red-700"
-            >
-              TENTAR NOVAMENTE
-            </button>
-          </div>
-        )}
-
-        {/* MUDANÇA AQUI: O formulário aparece tanto em idle quanto em loading */}
-        {(status === 'idle' || status === 'loading') && (
-          <div className="bg-white rounded-[32px] shadow-xl border border-gray-100 overflow-hidden">
-            <div className="flex bg-gray-50 border-b">
-              <button 
-                onClick={() => setActiveTab('camera')}
-                className={`flex-1 py-5 flex items-center justify-center gap-2 font-black text-xs tracking-widest transition-all ${activeTab === 'camera' ? 'text-[#00B9F2] bg-white' : 'text-gray-400'}`}
-              >
-                <QrCode size={18} /> CÂMERA
-              </button>
-              <button 
-                onClick={() => setActiveTab('manual')}
-                className={`flex-1 py-5 flex items-center justify-center gap-2 font-black text-xs tracking-widest transition-all ${activeTab === 'manual' ? 'text-[#00B9F2] bg-white' : 'text-gray-400'}`}
-              >
-                <Keyboard size={18} /> CÓDIGO MANUAL
-              </button>
-            </div>
-
-            <div className="p-8">
-              {activeTab === 'camera' ? (
-                <div className="space-y-6">
-                  <div id="reader" className="overflow-hidden rounded-2xl border-2 border-dashed border-gray-200"></div>
-                  <p className="text-center text-sm text-gray-400 px-4">
-                    Aponte a câmera para o QR Code do cliente.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-6">
-                   <div className="space-y-2">
-                      <label className="text-xs font-black text-gray-400 uppercase tracking-widest ml-1">ID do Cupom</label>
-                      <input 
-                        type="text" 
-                        value={manualCode}
-                        onChange={(e) => setManualCode(e.target.value)}
-                        placeholder="Ex: 550e8400-e29b..."
-                        className="w-full p-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-[#00B9F2] text-gray-700 font-mono text-sm"
-                        disabled={status === 'loading'}
-                      />
-                   </div>
-                   <button 
-                    disabled={!manualCode || status === 'loading'}
-                    onClick={() => validarCupom(manualCode)}
-                    className="w-full bg-[#00B9F2] text-white font-black py-4 rounded-2xl shadow-lg shadow-[#00B9F2]/20 hover:bg-[#0092bf] transition-all disabled:opacity-30 uppercase tracking-widest"
-                  >
-                    {status === 'loading' ? <Loader2 className="animate-spin mx-auto" /> : "Confirmar Validação"}
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+      <div className="flex gap-2 mb-6">
+        <button
+          type="button"
+          onClick={() => setMode('manual')}
+          className={`flex-1 py-3 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors ${
+            mode === 'manual' ? 'bg-[#00B9F2] text-white' : 'bg-slate-100 text-slate-600'
+          }`}
+        >
+          <Keyboard size={18} /> Digitar código
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode('scanner')}
+          className={`flex-1 py-3 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors ${
+            mode === 'scanner' ? 'bg-[#00B9F2] text-white' : 'bg-slate-100 text-slate-600'
+          }`}
+        >
+          <QrCode size={18} /> Ler QR Code
+        </button>
       </div>
+
+      {mode === 'manual' && (
+        <div className="space-y-3">
+          <input
+            value={code}
+            onChange={e => setCode(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleValidate()}
+            placeholder="Ex: 15OFFPRATO"
+            className="w-full px-4 py-3 border rounded-xl uppercase outline-[#00B9F2]"
+            autoFocus
+          />
+          <button
+            type="button"
+            onClick={() => handleValidate()}
+            disabled={validating}
+            className="w-full py-3 bg-[#00B9F2] text-white rounded-xl font-bold disabled:opacity-60 flex items-center justify-center"
+          >
+            {validating ? <Loader2 className="animate-spin" size={20} /> : 'Validar Cupom'}
+          </button>
+        </div>
+      )}
+
+      {mode === 'scanner' && (
+        <div id={SCANNER_DIV_ID} className="rounded-xl overflow-hidden" />
+      )}
+
+      {result.status !== 'idle' && (
+        <div
+          className={`mt-6 p-4 rounded-xl border flex items-start gap-3 ${
+            result.status === 'success'
+              ? 'bg-green-50 border-green-200'
+              : 'bg-red-50 border-red-200'
+          }`}
+        >
+          {result.status === 'success' ? (
+            <CheckCircle2 className="text-green-600 shrink-0" size={24} />
+          ) : (
+            <XCircle className="text-red-600 shrink-0" size={24} />
+          )}
+          <div>
+            {result.status === 'success' && (
+              <>
+                <p className="font-bold text-green-800">Cupom válido!</p>
+                <p className="text-sm text-green-700">{result.coupon?.title}</p>
+              </>
+            )}
+            {result.status === 'expired' && (
+              <>
+                <p className="font-bold text-red-800">Cupom expirado</p>
+                <p className="text-sm text-red-700">{result.coupon?.title}</p>
+              </>
+            )}
+            {result.status === 'invalid' && (
+              <>
+                <p className="font-bold text-red-800">Cupom inativo</p>
+                <p className="text-sm text-red-700">{result.coupon?.title}</p>
+              </>
+            )}
+            {result.status === 'not_found' && (
+              <p className="font-bold text-red-800">
+                Código não encontrado para o seu estabelecimento
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
-  );
+  )
 }
