@@ -1,9 +1,10 @@
 import { ReactNode } from 'react';
 import Link from 'next/link';
-import { LayoutDashboard, PlusCircle, QrCode, History, MessageCircle, LogOut } from 'lucide-react';
+import { LayoutDashboard, PlusCircle, QrCode, History, MessageCircle } from 'lucide-react';
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
+import LogoutButton from './components/LogoutButton'
 
 export default async function PartnerLayout({ children }: { children: ReactNode }) {
   const cookieStore = await cookies()
@@ -77,10 +78,7 @@ export default async function PartnerLayout({ children }: { children: ReactNode 
             <MessageCircle size={20} />
             Suporte
           </Link>
-          <button className="flex items-center gap-3 p-3 text-red-500 hover:bg-red-50 rounded-lg transition-colors font-medium w-full text-left">
-            <LogOut size={20} />
-            Sair
-          </button>
+          <LogoutButton />
         </div>
       </aside>
 

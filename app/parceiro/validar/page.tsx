@@ -1,29 +1,41 @@
-"use client";
-import { useEffect, useState } from 'react';
-import { createBrowserClient } from '@supabase/ssr';
-import { Html5QrcodeScanner } from 'html5-qrcode';
-import { QrCode, Keyboard, CheckCircle, XCircle, Loader2, ArrowLeft, RefreshCw } from 'lucide-react';
-import { toast } from 'sonner';
-import Link from 'next/link';
+'use client'
+import { useEffect, useRef, useState } from 'react'
+import { supabase } from '@/lib/supabase'
+import { toast } from 'sonner'
+import { QrCode, Keyboard, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 
-export default function ValidadorParceiro() {
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+type ResultStatus = 'idle' | 'success' | 'expired' | 'invalid' | 'not_found'
 
-  const [activeTab, setActiveTab] = useState<'camera' | 'manual'>('camera');
-  // Tipagem explícita para evitar erros de inferência
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [message, setMessage] = useState('');
-  const [manualCode, setManualCode] = useState('');
+type CouponPreview = {
+  id: string
+  title: string
+  short_description: string | null
+}
 
-  async function validarCupom(usageId: string) {
-    if (!usageId) return;
-    setStatus('loading');
-    
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
+type ValidationResult = {
+  status: ResultStatus
+  coupon?: CouponPreview
+}
+
+const SCANNER_DIV_ID = 'qr-reader'
+
+export default function ValidarCupom() {
+  const [partnerId, setPartnerId] = useState<string | null>(null)
+  const [loadingPartner, setLoadingPartner] = useState(true)
+  const [mode, setMode] = useState<'manual' | 'scanner'>('manual')
+  const [code, setCode] = useState('')
+  const [validating, setValidating] = useState(false)
+  const [result, setResult] = useState<ValidationResult>({ status: 'idle' })
+  const scannerRef = useRef<any>(null)
+
+  // Descobre o parceiro logado a partir da sessão atual
+  useEffect(() => {
+    async function loadPartner() {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        setLoadingPartner(false)
+        return
+      }
       const { data: partner } = await supabase
         .from('partners')
         .select('id')
@@ -134,40 +146,28 @@ export default function ValidadorParceiro() {
 
       if (usageError) throw usageError
 
-      setStatus('success');
-      setMessage(`Cupom "${usage.coupons.title}" validado com sucesso!`);
-      toast.success("Cupom validado!");
-
-    } catch (err: any) {
-      setStatus('error');
-      setMessage(err.message || "Erro ao validar.");
+      setResult({ status: 'success', coupon: preview })
+      toast.success('Cupom validado com sucesso!')
+    } catch (error: any) {
+      console.error('Erro ao validar cupom:', error)
+      toast.error(error.message || 'Erro ao validar cupom')
+    } finally {
+      setValidating(false)
+      setCode('')
     }
   }
 
-  useEffect(() => {
-    let scanner: Html5QrcodeScanner | null = null;
+  if (loadingPartner) {
+    return <div className="p-10 text-center text-slate-500">Carregando...</div>
+  }
 
-    if (activeTab === 'camera' && status === 'idle') {
-      scanner = new Html5QrcodeScanner(
-        "reader", 
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        false
-      );
-
-      scanner.render((decodedText) => {
-        if (scanner) scanner.clear();
-        validarCupom(decodedText);
-      }, (error) => {
-        // Erro silencioso
-      });
-    }
-
-    return () => {
-      if (scanner) {
-        scanner.clear().catch(err => console.error("Erro ao fechar scanner", err));
-      }
-    };
-  }, [activeTab, status]);
+  if (!partnerId) {
+    return (
+      <div className="p-10 text-center text-red-500">
+        Não foi possível identificar seu estabelecimento. Faça login novamente.
+      </div>
+    )
+  }
 
   return (
     <div className="max-w-md mx-auto my-10 p-6">
